@@ -418,7 +418,7 @@ if __name__ == "__main__":
     print(f"Models: {len(get_all_models())}")
     print("External AI API: DISABLED")
     print("Local Model Inference: ENABLED")
-    print("Render Model Loading: DISABLED")
+    print("Model Loading: ENABLED")
     print("==============================================")
 
     app.run(

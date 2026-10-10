@@ -20,7 +20,6 @@ from collections import OrderedDict
 from typing import Any, Dict, Optional
 
 from config import (
-    DEVICE,
     HF_REPOSITORIES,
     HF_TOKEN,
     MAX_LOADED_MODELS,
@@ -33,8 +32,7 @@ class ModelManager:
     """
     Central manager for all IraAI models.
 
-    Models are loaded lazily:
-    a model is loaded only when it is actually requested.
+    Models are loaded lazily and cached using an LRU policy.
     """
 
     def __init__(self) -> None:
@@ -47,7 +45,6 @@ class ModelManager:
 
     def list_models(self) -> Dict[str, Dict[str, str]]:
         """Return information about all configured models."""
-
         return {
             role: {
                 "name": get_model_name(role),
@@ -58,27 +55,26 @@ class ModelManager:
 
     def is_loaded(self, role: str) -> bool:
         """Check whether a model is currently loaded."""
-
         with self._lock:
             return role in self._models
 
     def loaded_models(self) -> list[str]:
         """Return currently loaded model roles."""
-
         with self._lock:
             return list(self._models.keys())
+
+    def list_loaded_models(self) -> list[str]:
+        """
+        Compatibility alias used by server.py.
+        """
+        return self.loaded_models()
 
     # ========================================================
     # Model loading
     # ========================================================
 
     def load_model(self, role: str) -> Any:
-        """
-        Load a model from Hugging Face.
-
-        The actual model-loading implementation is delegated
-        to the model-specific loader.
-        """
+        """Load a model lazily and return its model data."""
 
         with self._lock:
 
@@ -91,29 +87,21 @@ class ModelManager:
                 self._models.move_to_end(role)
                 return self._models[role]
 
-            model = self._create_model(role)
+            model_data = self._create_model(role)
 
-            self._models[role] = model
+            self._models[role] = model_data
             self._models.move_to_end(role)
 
             self._enforce_cache_limit()
 
-            return model
+            return model_data
 
     # ========================================================
     # Model creation
     # ========================================================
 
     def _create_model(self, role: str) -> Any:
-        """
-        Create a model instance.
-
-        This method intentionally keeps model-specific
-        dependencies isolated.
-
-        Model implementations will be connected here as the
-        inference routes are added.
-        """
+        """Create a model according to its configured role."""
 
         repository = get_repository(role)
 
@@ -180,6 +168,26 @@ class ModelManager:
         )
 
     # ========================================================
+    # Hugging Face authentication
+    # ========================================================
+
+    @staticmethod
+    def _token_kwargs() -> Dict[str, Any]:
+        """
+        Return Hugging Face authentication arguments.
+
+        Public repositories work without HF_TOKEN.
+        Private repositories can use HF_TOKEN.
+        """
+
+        if HF_TOKEN:
+            return {
+                "token": HF_TOKEN
+            }
+
+        return {}
+
+    # ========================================================
     # Text models
     # ========================================================
 
@@ -188,13 +196,6 @@ class ModelManager:
         role: str,
         repository: str,
     ) -> Any:
-        """
-        Load Qwen/DeepSeek text models.
-
-        The heavy ML dependencies are imported lazily so the
-        inference server can start even before every model
-        dependency is installed.
-        """
 
         try:
             from transformers import (
@@ -206,24 +207,18 @@ class ModelManager:
                 "transformers is required for text models."
             ) from exc
 
-        tokenizer_kwargs: Dict[str, Any] = {}
-
-        model_kwargs: Dict[str, Any] = {}
-
-        if HF_TOKEN:
-            tokenizer_kwargs["token"] = HF_TOKEN
-            model_kwargs["token"] = HF_TOKEN
+        token_kwargs = self._token_kwargs()
 
         tokenizer = AutoTokenizer.from_pretrained(
             repository,
-            **tokenizer_kwargs,
+            **token_kwargs,
         )
 
         model = AutoModelForCausalLM.from_pretrained(
             repository,
             device_map="auto",
             torch_dtype="auto",
-            **model_kwargs,
+            **token_kwargs,
         )
 
         return {
@@ -246,31 +241,26 @@ class ModelManager:
 
         try:
             from transformers import (
-                AutoProcessor,
                 AutoModelForImageTextToText,
+                AutoProcessor,
             )
         except ImportError as exc:
             raise RuntimeError(
                 "transformers is required for vision models."
             ) from exc
 
-        processor_kwargs: Dict[str, Any] = {}
-        model_kwargs: Dict[str, Any] = {}
-
-        if HF_TOKEN:
-            processor_kwargs["token"] = HF_TOKEN
-            model_kwargs["token"] = HF_TOKEN
+        token_kwargs = self._token_kwargs()
 
         processor = AutoProcessor.from_pretrained(
             repository,
-            **processor_kwargs,
+            **token_kwargs,
         )
 
         model = AutoModelForImageTextToText.from_pretrained(
             repository,
             device_map="auto",
             torch_dtype="auto",
-            **model_kwargs,
+            **token_kwargs,
         )
 
         return {
@@ -301,23 +291,18 @@ class ModelManager:
                 "transformers is required for speech models."
             ) from exc
 
-        processor_kwargs: Dict[str, Any] = {}
-        model_kwargs: Dict[str, Any] = {}
-
-        if HF_TOKEN:
-            processor_kwargs["token"] = HF_TOKEN
-            model_kwargs["token"] = HF_TOKEN
+        token_kwargs = self._token_kwargs()
 
         processor = AutoProcessor.from_pretrained(
             repository,
-            **processor_kwargs,
+            **token_kwargs,
         )
 
         model = AutoModelForSpeechSeq2Seq.from_pretrained(
             repository,
             device_map="auto",
             torch_dtype="auto",
-            **model_kwargs,
+            **token_kwargs,
         )
 
         return {
@@ -345,14 +330,9 @@ class ModelManager:
                 "Required TTS dependencies are not installed."
             ) from exc
 
-        model_kwargs: Dict[str, Any] = {}
-
-        if HF_TOKEN:
-            model_kwargs["token"] = HF_TOKEN
-
         model = AutoModel.from_pretrained(
             repository,
-            **model_kwargs,
+            **self._token_kwargs(),
         )
 
         return {
@@ -382,23 +362,18 @@ class ModelManager:
                 "transformers is required for MusicGen."
             ) from exc
 
-        processor_kwargs: Dict[str, Any] = {}
-        model_kwargs: Dict[str, Any] = {}
-
-        if HF_TOKEN:
-            processor_kwargs["token"] = HF_TOKEN
-            model_kwargs["token"] = HF_TOKEN
+        token_kwargs = self._token_kwargs()
 
         processor = AutoProcessor.from_pretrained(
             repository,
-            **processor_kwargs,
+            **token_kwargs,
         )
 
         model = MusicgenForConditionalGeneration.from_pretrained(
             repository,
             device_map="auto",
             torch_dtype="auto",
-            **model_kwargs,
+            **token_kwargs,
         )
 
         return {
@@ -426,21 +401,19 @@ class ModelManager:
                 "diffusers is required for video generation."
             ) from exc
 
-        kwargs: Dict[str, Any] = {}
-
-        if HF_TOKEN:
-            kwargs["token"] = HF_TOKEN
-
         pipeline = DiffusionPipeline.from_pretrained(
             repository,
             torch_dtype="auto",
-            **kwargs,
+            **self._token_kwargs(),
         )
 
         return {
             "type": "video",
             "role": role,
             "repository": repository,
+
+            # Keep both names for route compatibility.
+            "model": pipeline,
             "pipeline": pipeline,
         }
 
@@ -461,21 +434,19 @@ class ModelManager:
                 "diffusers is required for SDXL."
             ) from exc
 
-        kwargs: Dict[str, Any] = {}
-
-        if HF_TOKEN:
-            kwargs["token"] = HF_TOKEN
-
         pipeline = StableDiffusionXLPipeline.from_pretrained(
             repository,
             torch_dtype="auto",
-            **kwargs,
+            **self._token_kwargs(),
         )
 
         return {
             "type": "image",
             "role": role,
             "repository": repository,
+
+            # Keep both names for route compatibility.
+            "model": pipeline,
             "pipeline": pipeline,
         }
 
@@ -490,27 +461,29 @@ class ModelManager:
     ) -> Any:
 
         try:
-            from diffusers import StableDiffusionXLImg2ImgPipeline
+            from diffusers import (
+                StableDiffusionXLImg2ImgPipeline
+            )
         except ImportError as exc:
             raise RuntimeError(
                 "diffusers is required for SDXL Refiner."
             ) from exc
 
-        kwargs: Dict[str, Any] = {}
-
-        if HF_TOKEN:
-            kwargs["token"] = HF_TOKEN
-
-        pipeline = StableDiffusionXLImg2ImgPipeline.from_pretrained(
-            repository,
-            torch_dtype="auto",
-            **kwargs,
+        pipeline = (
+            StableDiffusionXLImg2ImgPipeline.from_pretrained(
+                repository,
+                torch_dtype="auto",
+                **self._token_kwargs(),
+            )
         )
 
         return {
             "type": "image_refiner",
             "role": role,
             "repository": repository,
+
+            # Keep both names for route compatibility.
+            "model": pipeline,
             "pipeline": pipeline,
         }
 
@@ -525,20 +498,17 @@ class ModelManager:
     ) -> Any:
 
         try:
-            from sentence_transformers import SentenceTransformer
+            from sentence_transformers import (
+                SentenceTransformer
+            )
         except ImportError as exc:
             raise RuntimeError(
                 "sentence-transformers is required for embeddings."
             ) from exc
 
-        model_kwargs: Dict[str, Any] = {}
-
-        if HF_TOKEN:
-            model_kwargs["token"] = HF_TOKEN
-
         model = SentenceTransformer(
             repository,
-            **model_kwargs,
+            **self._token_kwargs(),
         )
 
         return {
@@ -553,19 +523,23 @@ class ModelManager:
     # ========================================================
 
     def _enforce_cache_limit(self) -> None:
-        """Unload least recently used models if a limit exists."""
+        """Unload least recently used models."""
 
         if MAX_LOADED_MODELS <= 0:
             return
 
         while len(self._models) > MAX_LOADED_MODELS:
-            role, model = self._models.popitem(
+
+            role, model_data = self._models.popitem(
                 last=False
             )
 
-            self._release_model(model)
+            self._release_model(model_data)
 
-    def unload_model(self, role: str) -> bool:
+    def unload_model(
+        self,
+        role: str,
+    ) -> bool:
         """Unload one model."""
 
         with self._lock:
@@ -573,14 +547,14 @@ class ModelManager:
             if role not in self._models:
                 return False
 
-            model = self._models.pop(role)
+            model_data = self._models.pop(role)
 
-            self._release_model(model)
+            self._release_model(model_data)
 
             return True
 
     def unload_all(self) -> None:
-        """Unload every currently loaded model."""
+        """Unload all currently loaded models."""
 
         with self._lock:
 
@@ -590,29 +564,48 @@ class ModelManager:
 
             self._models.clear()
 
-            for model in models:
-                self._release_model(model)
+            for model_data in models:
+                self._release_model(model_data)
 
     # ========================================================
     # Memory cleanup
     # ========================================================
 
-    def _release_model(self, model: Any) -> None:
-        """Release model references and clear available memory."""
+    def _release_model(
+        self,
+        model_data: Any,
+    ) -> None:
+        """
+        Release model references and clear available memory.
+
+        Some pipelines are stored under both "model" and
+        "pipeline", so duplicate objects are handled safely.
+        """
 
         try:
 
-            if isinstance(model, dict):
+            seen: set[int] = set()
 
-                for value in model.values():
+            if isinstance(model_data, dict):
+                values = model_data.values()
+            else:
+                values = [model_data]
 
-                    if hasattr(value, "to"):
-                        try:
-                            value.to("cpu")
-                        except Exception:
-                            pass
+            for value in values:
 
-            del model
+                if id(value) in seen:
+                    continue
+
+                seen.add(id(value))
+
+                if hasattr(value, "to"):
+
+                    try:
+                        value.to("cpu")
+                    except Exception:
+                        pass
+
+            del model_data
 
         except Exception:
             pass
@@ -640,12 +633,12 @@ class ModelManager:
 
         with self._lock:
 
-            model = self._models.get(role)
+            model_data = self._models.get(role)
 
-            if model is not None:
+            if model_data is not None:
                 self._models.move_to_end(role)
 
-            return model
+            return model_data
 
     def get_model(
         self,
