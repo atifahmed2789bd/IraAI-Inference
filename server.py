@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import atexit
 import os
-from typing import Any, Dict
+from typing import Any
 
 from flask import Flask, jsonify, request
 from flask_cors import CORS
@@ -46,9 +46,7 @@ from routes.embedding import embedding_bp
 
 validate_config()
 
-app = Flask(
-    __name__
-)
+app = Flask(__name__)
 
 CORS(
     app,
@@ -59,7 +57,6 @@ CORS(
     },
 )
 
-
 model_manager = get_model_manager()
 
 
@@ -67,33 +64,13 @@ model_manager = get_model_manager()
 # Blueprint Registration
 # ============================================================
 
-app.register_blueprint(
-    chat_bp
-)
-
-app.register_blueprint(
-    vision_bp
-)
-
-app.register_blueprint(
-    speech_bp
-)
-
-app.register_blueprint(
-    audio_bp
-)
-
-app.register_blueprint(
-    image_bp
-)
-
-app.register_blueprint(
-    video_bp
-)
-
-app.register_blueprint(
-    embedding_bp
-)
+app.register_blueprint(chat_bp)
+app.register_blueprint(vision_bp)
+app.register_blueprint(speech_bp)
+app.register_blueprint(audio_bp)
+app.register_blueprint(image_bp)
+app.register_blueprint(video_bp)
+app.register_blueprint(embedding_bp)
 
 
 # ============================================================
@@ -101,12 +78,7 @@ app.register_blueprint(
 # ============================================================
 
 def _is_authorized() -> bool:
-    """
-    Validate optional inference-server API key.
-
-    Authentication is intentionally handled here,
-    outside individual model routes.
-    """
+    """Validate the optional inference-server API key."""
 
     if not INFERENCE_API_KEY:
         return True
@@ -116,9 +88,7 @@ def _is_authorized() -> bool:
         "",
     ).strip()
 
-    expected = (
-        f"Bearer {INFERENCE_API_KEY}"
-    )
+    expected = f"Bearer {INFERENCE_API_KEY}"
 
     return authorization == expected
 
@@ -126,7 +96,6 @@ def _is_authorized() -> bool:
 @app.before_request
 def authenticate_request():
 
-    # Public endpoints.
     public_paths = {
         "/",
         "/health",
@@ -162,9 +131,7 @@ def index():
             "external_ai_api": False,
             "local_model_inference": True,
             "render_backend": False,
-            "models": len(
-                get_all_models()
-            ),
+            "models": len(get_all_models()),
         }
     )
 
@@ -177,7 +144,6 @@ def index():
 def health():
 
     if not HEALTH_CHECK_ENABLED:
-
         return jsonify(
             {
                 "success": True,
@@ -186,22 +152,16 @@ def health():
             }
         )
 
-    loaded_models = (
-        model_manager.list_loaded_models()
-    )
+    loaded_models = model_manager.loaded_models()
 
     return jsonify(
         {
             "success": True,
             "status": "healthy",
             "server": "inference",
-            "model_count": len(
-                get_all_models()
-            ),
+            "model_count": len(get_all_models()),
             "loaded_models": loaded_models,
-            "loaded_count": len(
-                loaded_models
-            ),
+            "loaded_count": len(loaded_models),
         }
     )
 
@@ -214,22 +174,16 @@ def health():
 def models():
 
     configured_models = get_all_models()
-
-    loaded_models = (
-        model_manager.list_loaded_models()
-    )
+    loaded_models = model_manager.loaded_models()
 
     result = []
 
     for role, model_name in configured_models.items():
-
         result.append(
             {
                 "role": role,
                 "model": model_name,
-                "loaded": (
-                    role in loaded_models
-                ),
+                "loaded": role in loaded_models,
             }
         )
 
@@ -242,20 +196,15 @@ def models():
 
 
 @app.get("/v1/models/<role>")
-def model_info(
-    role: str,
-):
+def model_info(role: str):
 
     configured_models = get_all_models()
 
     if role not in configured_models:
-
         return jsonify(
             {
                 "success": False,
-                "error": (
-                    f"Unknown model role: {role}"
-                ),
+                "error": f"Unknown model role: {role}",
             }
         ), 404
 
@@ -264,36 +213,26 @@ def model_info(
             "success": True,
             "role": role,
             "model": configured_models[role],
-            "loaded": model_manager.is_loaded(
-                role
-            ),
+            "loaded": model_manager.is_loaded(role),
         }
     )
 
 
 @app.post("/v1/models/<role>/load")
-def load_model(
-    role: str,
-):
+def load_model(role: str):
 
     configured_models = get_all_models()
 
     if role not in configured_models:
-
         return jsonify(
             {
                 "success": False,
-                "error": (
-                    f"Unknown model role: {role}"
-                ),
+                "error": f"Unknown model role: {role}",
             }
         ), 404
 
     try:
-
-        model_manager.load_model(
-            role
-        )
+        model_manager.load_model(role)
 
         return jsonify(
             {
@@ -304,62 +243,56 @@ def load_model(
             }
         )
 
-    except Exception as exc:
+    except Exception:
+        app.logger.exception(
+            "Model loading failed for role: %s",
+            role,
+        )
 
         return jsonify(
             {
                 "success": False,
                 "role": role,
-                "error": (
-                    f"Model loading failed: {exc}"
-                ),
+                "error": "Model loading failed.",
             }
         ), 500
 
 
 @app.post("/v1/models/<role>/unload")
-def unload_model(
-    role: str,
-):
+def unload_model(role: str):
 
     configured_models = get_all_models()
 
     if role not in configured_models:
-
         return jsonify(
             {
                 "success": False,
-                "error": (
-                    f"Unknown model role: {role}"
-                ),
+                "error": f"Unknown model role: {role}",
             }
         ), 404
 
     try:
-
-        unloaded = model_manager.unload_model(
-            role
-        )
+        unloaded = model_manager.unload_model(role)
 
         return jsonify(
             {
                 "success": True,
                 "role": role,
-                "unloaded": bool(
-                    unloaded
-                ),
+                "unloaded": bool(unloaded),
             }
         )
 
-    except Exception as exc:
+    except Exception:
+        app.logger.exception(
+            "Model unload failed for role: %s",
+            role,
+        )
 
         return jsonify(
             {
                 "success": False,
                 "role": role,
-                "error": (
-                    f"Model unload failed: {exc}"
-                ),
+                "error": "Model unload failed.",
             }
         ), 500
 
@@ -368,29 +301,23 @@ def unload_model(
 def unload_all_models():
 
     try:
-
         model_manager.unload_all()
 
         return jsonify(
             {
                 "success": True,
-                "message": (
-                    "All loaded models were unloaded."
-                ),
-                "loaded_models": (
-                    model_manager.list_loaded_models()
-                ),
+                "message": "All loaded models were unloaded.",
+                "loaded_models": model_manager.loaded_models(),
             }
         )
 
-    except Exception as exc:
+    except Exception:
+        app.logger.exception("Failed to unload all models")
 
         return jsonify(
             {
                 "success": False,
-                "error": (
-                    f"Failed to unload models: {exc}"
-                ),
+                "error": "Failed to unload models.",
             }
         ), 500
 
@@ -402,9 +329,7 @@ def unload_all_models():
 @app.get("/v1/status")
 def server_status():
 
-    loaded_models = (
-        model_manager.list_loaded_models()
-    )
+    loaded_models = model_manager.loaded_models()
 
     return jsonify(
         {
@@ -413,13 +338,9 @@ def server_status():
             "status": "online",
             "local_model_inference": True,
             "external_ai_api": False,
-            "configured_models": len(
-                get_all_models()
-            ),
+            "configured_models": len(get_all_models()),
             "loaded_models": loaded_models,
-            "loaded_count": len(
-                loaded_models
-            ),
+            "loaded_count": len(loaded_models),
             "pid": os.getpid(),
         }
     )
@@ -430,9 +351,7 @@ def server_status():
 # ============================================================
 
 @app.errorhandler(404)
-def not_found(
-    error: Any,
-):
+def not_found(error: Any):
 
     return jsonify(
         {
@@ -444,9 +363,7 @@ def not_found(
 
 
 @app.errorhandler(405)
-def method_not_allowed(
-    error: Any,
-):
+def method_not_allowed(error: Any):
 
     return jsonify(
         {
@@ -459,9 +376,7 @@ def method_not_allowed(
 
 
 @app.errorhandler(500)
-def internal_server_error(
-    error: Any,
-):
+def internal_server_error(error: Any):
 
     return jsonify(
         {
@@ -480,12 +395,12 @@ def cleanup():
     try:
         model_manager.unload_all()
     except Exception:
-        pass
+        app.logger.exception(
+            "Error while cleaning up loaded models"
+        )
 
 
-atexit.register(
-    cleanup
-)
+atexit.register(cleanup)
 
 
 # ============================================================
@@ -494,39 +409,17 @@ atexit.register(
 
 if __name__ == "__main__":
 
-    print(
-        "=============================================="
-    )
-    print(
-        "        IraAI Inference Server"
-    )
-    print(
-        "=============================================="
-    )
-    print(
-        f"Host: {HOST}"
-    )
-    print(
-        f"Port: {PORT}"
-    )
-    print(
-        f"Debug: {DEBUG}"
-    )
-    print(
-        f"Models: {len(get_all_models())}"
-    )
-    print(
-        "External AI API: DISABLED"
-    )
-    print(
-        "Local Model Inference: ENABLED"
-    )
-    print(
-        "Render Model Loading: DISABLED"
-    )
-    print(
-        "=============================================="
-    )
+    print("==============================================")
+    print("        IraAI Inference Server")
+    print("==============================================")
+    print(f"Host: {HOST}")
+    print(f"Port: {PORT}")
+    print(f"Debug: {DEBUG}")
+    print(f"Models: {len(get_all_models())}")
+    print("External AI API: DISABLED")
+    print("Local Model Inference: ENABLED")
+    print("Render Model Loading: DISABLED")
+    print("==============================================")
 
     app.run(
         host=HOST,
